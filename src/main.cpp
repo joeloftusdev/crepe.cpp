@@ -2,6 +2,30 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <string>
+#include <sstream>
+
+#include "../external/model.ort.h"
+#include "wavloader.h"
+
+float get_pitch_from_crepe(const float* output_data, size_t output_size) {
+    int max_index = 0;
+    float max_value = output_data[0];
+
+    for (size_t i = 1; i < output_size; ++i) {
+        if (output_data[i] > max_value) {
+            max_value = output_data[i];
+            max_index = i;
+        }
+    }
+
+    // Convert bin index to frequency (Hz)
+    // CREPE maps indices to frequencies using this formula:
+    // freq = 10.0 * 2^((indices - 0.5 * 360) / 120)
+    float frequency = 10.0f * std::pow(2.0f, (max_index - 0.5f * 360.0f) / 120.0f);
+
+    return frequency;
+}
 
 int main() {
     try {
@@ -11,19 +35,23 @@ int main() {
         session_options.SetIntraOpNumThreads(1);
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_ALL);
 
-        const std::string model_path = "../external/model.ort";
+        // Load the model from the model.ort.h
+        Ort::Session onnx_session(env, model_ort_start, model_ort_size, session_options);
 
-        // Check if the model file exists
-        if (std::ifstream model_file(model_path); !model_file.good()) {
-            std::cerr << "Model file not found: " << model_path << std::endl;
-            return 1;
+        // Load audio data from WAV file
+        std::string wav_file_path = "external/sweep.wav";
+        std::vector<float> audio_data = load_wav_file(wav_file_path);
+
+        // Check if the loaded audio is at least 1024 samples long.  If not, pad with zeros.
+        if (audio_data.size() < 1024) {
+            audio_data.resize(1024, 0.0f); // Pad with zeros
         }
 
-        Ort::Session onnx_session(env, model_path.c_str(), session_options);
+        // Take the first 1024 samples
+        std::vector<float> input_data(audio_data.begin(), audio_data.begin() + 1024);
 
         // expected dimensions for the input tensor
         const std::vector<int64_t> input_dims = {1, 1024};
-        std::vector<float> input_data(1024);  // populate this with actual audio waveform data
 
         // input tensor
         const Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -78,11 +106,13 @@ int main() {
         std::vector<Ort::Value> output_tensors = onnx_session.Run(
             Ort::RunOptions{}, input_names_ptr.data(), &input_tensor, 1, output_names_ptr.data(), output_names_ptr.size());
 
+
         // just printing it for simplicity
         const auto* output_data = output_tensors[0].GetTensorMutableData<float>();
-        for (int i = 0; i < 10; ++i) {
-            std::cout << "Output " << i << ": " << output_data[i] << std::endl;
-        }
+        float pitch = get_pitch_from_crepe(output_data, output_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount());
+        std::cout << "Estimated pitch: " << pitch << " Hz" << std::endl;
+        std::cout << "Confidence: " << output_data[std::distance(output_data, std::max_element(output_data, output_data + output_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount()))] << std::endl;
+
     } catch (const Ort::Exception& e) {
         std::cerr << "ONNX Runtime exception: " << e.what() << std::endl;
         return 1;

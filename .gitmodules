@@ -1,0 +1,6 @@
+[submodule "deps/miniaudio"]
+	path = deps/miniaudio
+	url = https://github.com/mackron/miniaudio.git
+[submodule "deps/eigen"]
+	path = deps/eigen
+	url = https://gitlab.com/libeigen/eigen.git
