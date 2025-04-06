@@ -31,7 +31,7 @@ std::vector<float> load_wav_file(const std::string &filename, int *out_sample_ra
     if (needs_conversion) {
         std::vector<float> multi_channel_data(frame_count * decoder.outputChannels);
         const ma_uint64 frames_read =
-                ma_decoder_read_pcm_frames(&decoder, multi_channel_data.data(), frame_count, NULL);
+                ma_decoder_read_pcm_frames(&decoder, multi_channel_data.data(), frame_count, nullptr);
 
         for (ma_uint64 i = 0; i < frames_read; i++) {
             float sum = 0.0f;
@@ -49,17 +49,3 @@ std::vector<float> load_wav_file(const std::string &filename, int *out_sample_ra
 }
 
 
-
-
-void normalize_audio(Eigen::Ref<Eigen::VectorXf> audio_vec) {
-    // Remove dc offset
-    const float mean = audio_vec.mean();
-    audio_vec.array() -= mean;
-
-    //normalize
-    const float variance = audio_vec.squaredNorm() / static_cast<float>(audio_vec.size());
-
-    if (const float std_dev = std::sqrt(variance); std_dev > 1e-10f) {  // Avoid division by zero
-        audio_vec /= std_dev;
-    }
-}

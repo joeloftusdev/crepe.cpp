@@ -19,6 +19,8 @@ add_executable(CREPE_ONNX
         ${EXTERNAL_DIR}/model.ort.c
         src/wavloader.h
         src/wavloader.cpp
+        src/crepe.hpp
+        src/inference.cpp
 )
 
 target_link_libraries(CREPE_ONNX
