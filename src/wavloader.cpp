@@ -1,60 +1,65 @@
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 #include "wavloader.h"
-#include <fstream>
-#include <cstring>
+#include <iostream>
 
+std::vector<float> load_wav_file(const std::string &filename, int *out_sample_rate, std::string *error_msg) {
+    ma_decoder decoder;
 
-// simple function to load a wav file. I should really replace this with a library like libsndfile/miniaudio
-std::vector<float> load_wav_file(const std::string& filename, std::string* error_msg) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file) {
-        if (error_msg) *error_msg = "Could not open WAV file: " + filename;
+    if (const ma_result result = ma_decoder_init_file(filename.c_str(), nullptr, &decoder); result != MA_SUCCESS) {
+        if (error_msg) *error_msg = "Failed to initialize decoder for file: " + filename;
         return {};
     }
 
-    struct WavHeader {
-        char riff_id[4];
-        int riff_size;
-        char wave_id[4];
-        char fmt_id[4];
-        int fmt_size;
-        short audio_format;
-        short num_channels;
-        int sample_rate;
-        int byte_rate;
-        short block_align;
-        short bits_per_sample;
-        char data_id[4];
-        int data_size;
-    };
+    if (out_sample_rate) {
+        *out_sample_rate = static_cast<int>(decoder.outputSampleRate);
+        std::cout << "Debug: Detected sample rate: " << *out_sample_rate << "Hz" << std::endl;
+    }
 
-    WavHeader header{};
-    file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    ma_uint64 frame_count;
+    ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
 
-    if (std::strncmp(header.riff_id, "RIFF", 4) != 0 ||
-        std::strncmp(header.wave_id, "WAVE", 4) != 0 ||
-        std::strncmp(header.fmt_id, "fmt ", 4) != 0 ||
-        std::strncmp(header.data_id, "data", 4) != 0) {
-        if (error_msg) *error_msg = "Invalid WAV file format";
-        return {};
+
+    if (out_sample_rate) {
+        *out_sample_rate = decoder.outputSampleRate;
+    }
+
+    const bool needs_conversion = decoder.outputChannels > 1;
+
+    std::vector<float> audio_data(frame_count);
+
+    if (needs_conversion) {
+        std::vector<float> multi_channel_data(frame_count * decoder.outputChannels);
+        const ma_uint64 frames_read =
+                ma_decoder_read_pcm_frames(&decoder, multi_channel_data.data(), frame_count, NULL);
+
+        for (ma_uint64 i = 0; i < frames_read; i++) {
+            float sum = 0.0f;
+            for (ma_uint32 c = 0; c < decoder.outputChannels; c++) {
+                sum += multi_channel_data[i * decoder.outputChannels + c];
+            }
+            audio_data[i] = sum / decoder.outputChannels;
         }
-
-    if (header.audio_format != 1) {
-        if (error_msg) *error_msg = "Only PCM format is supported";
-        return {};
+    } else {
+        ma_decoder_read_pcm_frames(&decoder, audio_data.data(), frame_count, nullptr);
     }
 
-    if (header.bits_per_sample != 16) {
-        if (error_msg) *error_msg = "Only 16-bit audio is supported";
-        return {};
+    ma_decoder_uninit(&decoder);
+    return audio_data;
+}
+
+
+
+
+void normalize_audio(Eigen::Ref<Eigen::VectorXf> audio_vec) {
+    // Remove dc offset
+    const float mean = audio_vec.mean();
+    audio_vec.array() -= mean;
+
+    //normalize
+    const float variance = audio_vec.squaredNorm() / static_cast<float>(audio_vec.size());
+
+    if (const float std_dev = std::sqrt(variance); std_dev > 1e-10f) {  // Avoid division by zero
+        audio_vec /= std_dev;
     }
-
-    std::vector<short> audio_data(header.data_size / sizeof(short));
-    file.read(reinterpret_cast<char*>(audio_data.data()), header.data_size);
-
-    std::vector<float> float_audio_data(audio_data.size());
-    for (size_t i = 0; i < audio_data.size(); ++i) {
-        float_audio_data[i] = static_cast<float>(audio_data[i]) / 32768.0f; // mormalize
-    }
-
-    return float_audio_data;
 }

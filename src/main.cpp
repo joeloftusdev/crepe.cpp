@@ -8,7 +8,26 @@
 #include "../external/model.ort.h"
 #include "wavloader.h"
 
-float get_pitch_from_crepe(const float* output_data, size_t output_size) {
+float calculate_correlation(const std::vector<float>& x, const std::vector<float>& y) {
+    if (x.size() != y.size() || x.empty()) return 0.0f;
+
+    float sum_x = 0.0f, sum_y = 0.0f, sum_xy = 0.0f;
+    float sum_x2 = 0.0f, sum_y2 = 0.0f;
+
+    for (size_t i = 0; i < x.size(); i++) {
+        sum_x += x[i];
+        sum_y += y[i];
+        sum_xy += x[i] * y[i];
+        sum_x2 += x[i] * x[i];
+        sum_y2 += y[i] * y[i];
+    }
+
+    const auto n = static_cast<float>(x.size());
+    return (n * sum_xy - sum_x * sum_y) /
+           (std::sqrt(n * sum_x2 - sum_x * sum_x) * std::sqrt(n * sum_y2 - sum_y * sum_y));
+}
+
+float get_pitch_from_crepe(const float *output_data, const size_t output_size) {
     int max_index = 0;
     float max_value = output_data[0];
 
@@ -19,16 +38,35 @@ float get_pitch_from_crepe(const float* output_data, size_t output_size) {
         }
     }
 
-    // Convert bin index to frequency (Hz)
-    // CREPE maps indices to frequencies using this formula:
-    // freq = 10.0 * 2^((indices - 0.5 * 360) / 120)
-    float frequency = 10.0f * std::pow(2.0f, (max_index - 0.5f * 360.0f) / 120.0f);
-
+    // Convert index to cents
+    const float cents = 1997.3794084376191f + (static_cast<float>(max_index) * 7180.0f / 359.0f);
+    // Convert cents to frequency
+    const float frequency = 10.0f * std::pow(2.0f, cents / 1200.0f);
     return frequency;
 }
 
+// void analyze_frequency_bins() {
+//     std::cout << "CREPE Frequency Bin Analysis:" << std::endl;
+//
+//     // Sample a few bin indices to check spacing
+//     const int bins[] = {0, 60, 120, 180, 240, 300, 359};
+//
+//     std::cout << "Bin\tFrequency (Hz)" << std::endl;
+//     for (const int bin : bins) {
+//         const float freq = 10.0f * std::pow(2.0f, (bin - 0.5f * 360.0f) / 120.0f);
+//         std::cout << bin << "\t" << freq << std::endl;
+//     }
+//
+//     std::cout << "CREPE uses logarithmic frequency spacing (not linear)" << std::endl;
+//     std::cout << "Frequency = 10.0 * 2^((bin - 0.5*360)/120)" << std::endl;
+//     std::cout << "This covers approximately 10Hz to 7.9kHz" << std::endl;
+// }
+
 int main() {
     try {
+        // Enable this to debug frequency mapping
+        //analyze_frequency_bins();
+
         const Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "CREPE");
 
         Ort::SessionOptions session_options;
@@ -38,91 +76,115 @@ int main() {
         // Load the model from the model.ort.h
         Ort::Session onnx_session(env, model_ort_start, model_ort_size, session_options);
 
-        // Load audio data from WAV file
-        std::string wav_file_path = "external/sweep.wav";
-        std::vector<float> audio_data = load_wav_file(wav_file_path);
+        std::string wav_file_path = "../external/sweep.wav";
+        std::ifstream file_check(wav_file_path);
+        if (!file_check) {
+            std::cerr << "Error: Cannot open file at path: " << wav_file_path << std::endl;
+            return 1;
+        }
+        file_check.close();
+        int sample_rate = 0;
+        std::vector<float> audio_data = load_wav_file(wav_file_path, &sample_rate);
 
-        // Check if the loaded audio is at least 1024 samples long.  If not, pad with zeros.
-        if (audio_data.size() < 1024) {
-            audio_data.resize(1024, 0.0f); // Pad with zeros
+        if (sample_rate != 16000) {
+            std::cout << "Warning: CREPE expects 16kHz audio, got " << sample_rate << "Hz" << std::endl;
         }
 
-        // Take the first 1024 samples
-        std::vector<float> input_data(audio_data.begin(), audio_data.begin() + 1024);
+        // The original sweep is a linear frequency sweep from 20Hz to 2kHz
+        // We need to process the audio in frames with overlap
+        constexpr int hop_length = 160; // Match python impl default (10ms at 16kHz)
+        constexpr int frame_length = 1024;
 
-        // expected dimensions for the input tensor
-        const std::vector<int64_t> input_dims = {1, 1024};
+        std::vector<float> pitches;
+        std::vector<float> confidences;
+        std::vector<float> times;
 
-        // input tensor
-        const Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        const Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-            memory_info, input_data.data(), input_data.size(),
-            input_dims.data(), input_dims.size());
-
-        // input and output names from the model
+        // Get input/output names once before the loop
         Ort::AllocatorWithDefaultOptions allocator;
+        auto input_name_ptr = onnx_session.GetInputNameAllocated(0, allocator);
+        auto output_name_ptr = onnx_session.GetOutputNameAllocated(0, allocator);
+        const char* input_name = input_name_ptr.get();
+        const char* output_name = output_name_ptr.get();
 
-        // input names
-        size_t num_input_nodes = onnx_session.GetInputCount();
-        std::vector<std::string> input_name_strings;
-        std::vector<const char*> input_names_ptr;
+        std::cout << "Using input name: " << input_name << std::endl;
+        std::cout << "Using output name: " << output_name << std::endl;
 
-        for (size_t i = 0; i < num_input_nodes; i++) {
-            Ort::AllocatedStringPtr input_name_ptr = onnx_session.GetInputNameAllocated(i, allocator);
-            const char* input_name = input_name_ptr.get();
-            std::string input_name_str(input_name);
-            input_name_strings.push_back(input_name_str);
-            std::cout << "Input " << i << " name: " << input_name_str << std::endl;
-        }
+        for (size_t start_idx = 0; start_idx + frame_length <= audio_data.size(); start_idx += hop_length) {
+            // Create a frame of audio
+            std::vector frame(audio_data.begin() + start_idx,
+                               audio_data.begin() + start_idx + frame_length);
 
-        // output names
-        size_t num_output_nodes = onnx_session.GetOutputCount();
-        std::vector<std::string> output_name_strings;
-        std::vector<const char*> output_names_ptr;
+            // Map to Eigen for normalization, if needed
+            Eigen::Map<Eigen::VectorXf> frame_eigen(frame.data(), frame.size());
+            normalize_audio(frame_eigen);
 
-        for (size_t i = 0; i < num_output_nodes; i++) {
-            Ort::AllocatedStringPtr output_name_ptr = onnx_session.GetOutputNameAllocated(i, allocator);
-            if (const char* output_name = output_name_ptr.get(); output_name && *output_name) {
-                std::string output_name_str(output_name);
-                output_name_strings.push_back(output_name_str);
-                std::cout << "Output " << i << " name: " << output_name_str << std::endl;
-            } else {
-                std::cerr << "Output name cannot be empty" << std::endl;
-                return 1;
+            // Set up input tensor
+            const std::vector<int64_t> input_dims = {1, frame_length};
+            const Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+            const Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+                memory_info, frame.data(), frame.size(),
+                input_dims.data(), input_dims.size());
+
+            // Run inference with our previously obtained input/output names
+            std::vector<Ort::Value> output_tensors = onnx_session.Run(
+                Ort::RunOptions{}, &input_name, &input_tensor, 1, &output_name, 1);
+
+            // Process results
+            const auto* output_data = output_tensors[0].GetTensorMutableData<float>();
+            const size_t output_size = output_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount();
+
+            float pitch = get_pitch_from_crepe(output_data, output_size);
+
+            // Find max confidence
+            int max_index = std::distance(output_data,
+                                        std::max_element(output_data, output_data + output_size));
+            float confidence = output_data[max_index];
+
+            // Store results
+            pitches.push_back(pitch);
+            confidences.push_back(confidence);
+            times.push_back(static_cast<float>(start_idx) / sample_rate);
+
+            //print just the first few frames
+            if (pitches.size() <= 5) {
+                std::cout << "Frame " << pitches.size() << ": "
+                          << pitch << " Hz (confidence: " << confidence << ")" << std::endl;
             }
         }
 
-        // string vector to char* vector for inference
-        input_names_ptr.reserve(input_name_strings.size());
-        for (const auto& name : input_name_strings) {
-            input_names_ptr.push_back(name.c_str());
+        // Calculate statistics similar to the Python test
+        std::cout << "\nResults Summary:" << std::endl;
+        std::cout << "Processed " << pitches.size() << " frames" << std::endl;
+
+        // Mean confidence
+        float mean_confidence = 0.0f;
+        for (float conf : confidences) mean_confidence += conf;
+        mean_confidence /= confidences.size();
+        std::cout << "Mean confidence: " << mean_confidence << std::endl;
+
+        std::cout << "Sample frequencies (Hz): [";
+        for (size_t i = 0; i < std::min(static_cast<size_t>(5), pitches.size()); i++) {
+            std::cout << pitches[i];
+            if (i < std::min(static_cast<size_t>(4), pitches.size() - 1)) std::cout << " ";
         }
-        output_names_ptr.reserve(output_name_strings.size());
-        for (const auto& name : output_name_strings) {
-            output_names_ptr.push_back(name.c_str());
-        }
+        std::cout << "]" << std::endl;
 
-        // run inference using the names from above
-        std::vector<Ort::Value> output_tensors = onnx_session.Run(
-            Ort::RunOptions{}, input_names_ptr.data(), &input_tensor, 1, output_names_ptr.data(), output_names_ptr.size());
+        // Min and max
+        float min_freq = *std::ranges::min_element(pitches);
+        float max_freq = *std::ranges::max_element(pitches);
+        std::cout << "Min frequency: " << min_freq << std::endl;
+        std::cout << "Max frequency: " << max_freq << std::endl;
 
+        float correlation = calculate_correlation(times, pitches);
+        std::cout << "Correlation between time and frequency: " << correlation << std::endl;
+        std::cout << "Should be close to 1.0 for frequency sweep" << std::endl;
 
-        // just printing it for simplicity
-        const auto* output_data = output_tensors[0].GetTensorMutableData<float>();
-        float pitch = get_pitch_from_crepe(output_data, output_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount());
-        std::cout << "Estimated pitch: " << pitch << " Hz" << std::endl;
-        std::cout << "Confidence: " << output_data[std::distance(output_data, std::max_element(output_data, output_data + output_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount()))] << std::endl;
-
-    } catch (const Ort::Exception& e) {
-        std::cerr << "ONNX Runtime exception: " << e.what() << std::endl;
-        return 1;
     } catch (const std::exception& e) {
-        std::cerr << "Standard exception: " << e.what() << std::endl;
-        return 1;
-    } catch (...) {
-        std::cerr << "Unknown exception occurred" << std::endl;
+        std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
 
     return 0;
 }
+
+

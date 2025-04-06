@@ -10,9 +10,9 @@ set(EXTERNAL_DIR "${CMAKE_SOURCE_DIR}/external")
 set(DEPS_DIR "${CMAKE_SOURCE_DIR}/deps")
 include_directories(${EXTERNAL_DIR}/onnxruntime/include)
 
-#add_subdirectory(${DEPS_DIR}/eigen EXCLUDE_FROM_ALL)
-#include_directories(${DEPS_DIR}/eigen)
-#include_directories(${DEPS_DIR}/miniaudio)
+add_subdirectory(${DEPS_DIR}/eigen EXCLUDE_FROM_ALL)
+include_directories(${DEPS_DIR}/eigen)
+include_directories(${DEPS_DIR}/miniaudio)
 
 add_executable(CREPE_ONNX
         src/main.cpp
@@ -27,6 +27,7 @@ target_link_libraries(CREPE_ONNX
         "-framework CoreGraphics"
         "-framework Accelerate"
         "${EXTERNAL_DIR}/onnxruntime/macos-arm64_x86_64/libonnxruntime.a"
+        Eigen3::Eigen
 )
 
 target_compile_definitions(CREPE_ONNX PRIVATE
