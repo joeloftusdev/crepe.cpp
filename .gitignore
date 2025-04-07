@@ -1,3 +1,7 @@
 .idea
 external
 cmake-build-debug
+.DS_Store
+._.DS_Store
+**/.DS_Store
+**/._.DS_Store
