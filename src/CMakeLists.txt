@@ -8,14 +8,24 @@ target_include_directories(crepe_core PUBLIC
         ${DEPS_DIR}/eigen
 )
 
-target_link_libraries(crepe_core PUBLIC
-        "-framework Foundation"
-        "-framework CoreML"
-        "-framework CoreGraphics"
-        "-framework Accelerate"
-        "${EXTERNAL_DIR}/onnxruntime/macos-arm64_x86_64/libonnxruntime.a"
-        Eigen3::Eigen
-)
+if(EMSCRIPTEN)
+    # wasm build
+    target_link_libraries(crepe_core PUBLIC
+            "${EXTERNAL_DIR}/onnxruntime/wasm/libonnxruntime_webassembly.a"
+            Eigen3::Eigen
+            embind
+    )
+else()
+    # native mac build
+    target_link_libraries(crepe_core PUBLIC
+            "-framework Foundation"
+            "-framework CoreML"
+            "-framework CoreGraphics"
+            "-framework Accelerate"
+            "${EXTERNAL_DIR}/onnxruntime/macos-arm64_x86_64/libonnxruntime.a"
+            Eigen3::Eigen
+    )
+endif()
 
 target_sources(crepe_core PRIVATE
         ${EXTERNAL_DIR}/model.ort.c

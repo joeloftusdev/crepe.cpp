@@ -13,6 +13,9 @@ add_subdirectory(${DEPS_DIR}/eigen EXCLUDE_FROM_ALL)
 
 add_subdirectory(src)
 
-add_subdirectory(src-cli)
-
-add_subdirectory(src-test)
+if(EMSCRIPTEN)
+    add_subdirectory(src-wasm)
+else()
+    add_subdirectory(src-cli)
+    add_subdirectory(src-test)
+endif()
