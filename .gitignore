@@ -1,6 +1,7 @@
 .idea
 external
 cmake-build-debug
+cmake-build-release
 build-wasm
 build-wasm-release
 .DS_Store

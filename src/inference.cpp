@@ -7,35 +7,46 @@ extern const size_t model_ort_size;
 
 namespace crepe
 {
-float calculate_correlation(const Eigen::Ref<const Eigen::VectorXf> &x,
-                            const Eigen::Ref<const Eigen::VectorXf> &y)
+// precomputed constants
+namespace constants_precomputed
 {
-    // Copies to modify
-    Eigen::VectorXf x_tmp = x;
-    Eigen::VectorXf y_tmp = y;
+    constexpr float PITCH_CONVERSION_FACTOR = constants::MODEL_RANGE_CENTS / (constants::MODEL_BINS - 1.0f);
+    constexpr float OCTAVE_FACTOR = 1.0f / constants::CENTS_CONVERSION;
+}
 
-    // Normalize by removing mean
-    x_tmp.array() -= x_tmp.mean();
-    y_tmp.array() -= y_tmp.mean();
+float calculate_correlation(const Eigen::Ref<const Eigen::VectorXf> &x,
+                          const Eigen::Ref<const Eigen::VectorXf> &y)
+{
+    const float x_mean = x.mean();
+    const float y_mean = y.mean();
 
-    // Return correlation coefficient
-    return x_tmp.dot(y_tmp) / (x_tmp.norm() * y_tmp.norm());
+    float numerator = 0.0f;
+    float x_norm_sq = 0.0f;
+    float y_norm_sq = 0.0f;
+
+    for (Eigen::Index i = 0; i < x.size(); ++i) {
+        const float x_diff = x(i) - x_mean;
+        const float y_diff = y(i) - y_mean;
+        numerator += x_diff * y_diff;
+        x_norm_sq += x_diff * x_diff;
+        y_norm_sq += y_diff * y_diff;
+    }
+
+    return numerator / (std::sqrt(x_norm_sq) * std::sqrt(y_norm_sq));
 }
 
 float get_pitch_from_crepe(const float *output_data, const size_t output_size)
 {
     using namespace constants;
+    using namespace constants_precomputed;
 
     const Eigen::Map<const Eigen::VectorXf> output(output_data,
-                                                   static_cast<Eigen::Index>(output_size));
-    const std::ptrdiff_t max_index = std::distance(output.data(),
-                                                   std::max_element(output.data(),
-                                                       output.data() + output_size));
+                                                 static_cast<Eigen::Index>(output_size));
+    Eigen::Index max_index;
+    output.maxCoeff(&max_index);
 
-    const float cents = MODEL_BASE_CENTS +
-                        (static_cast<float>(max_index) * MODEL_RANGE_CENTS /
-                         (MODEL_BINS - 1.0f));
-    return BASE_FREQUENCY * std::pow(OCTAVE_BASE, cents / CENTS_CONVERSION);
+    const float cents = MODEL_BASE_CENTS + (static_cast<float>(max_index) * PITCH_CONVERSION_FACTOR);
+    return BASE_FREQUENCY * std::pow(OCTAVE_BASE, cents * OCTAVE_FACTOR);
 }
 
 void analyze_frequency_bins()
@@ -51,9 +62,9 @@ void analyze_frequency_bins()
     for (const int bin : bins)
     {
         const float freq = BASE_FREQUENCY *
-                           std::pow(OCTAVE_BASE,
-                                    (static_cast<float>(bin) - CENTER_OFFSET * MODEL_BINS) /
-                                    BINS_PER_OCTAVE);
+                         std::pow(OCTAVE_BASE,
+                                (static_cast<float>(bin) - CENTER_OFFSET * MODEL_BINS) /
+                                BINS_PER_OCTAVE);
         std::cout << bin << "\t" << freq << std::endl;
     }
 
@@ -76,17 +87,57 @@ void normalize_audio(Eigen::Ref<Eigen::VectorXf> audio_vec)
 
     if (const float std_dev = std::sqrt(variance); std_dev > 1e-10f)
     {
-        // Avoid division by zero
-        audio_vec /= std_dev;
+        const float inv_std_dev = 1.0f / std_dev;
+        audio_vec *= inv_std_dev;
     }
 }
 
-PredictionResults run_inference(const std::vector<float> &audio_data, const int sample_rate)
-{
-    return run_inference(audio_data.data(), static_cast<int>(audio_data.size()), sample_rate);
-}
+class CrepeModel {
+private:
+    Ort::Env env;
+    Ort::Session session;
+    Ort::AllocatorWithDefaultOptions allocator;
+    std::string input_name;
+    std::string output_name;
+    Ort::MemoryInfo memory_info;
+    std::vector<int64_t> input_dims;
 
-PredictionResults run_inference(const float *audio_data, const int length, const int sample_rate)
+    CrepeModel() :
+        env(ORT_LOGGING_LEVEL_WARNING, "CREPE"),
+        session(nullptr),
+        memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+        input_dims({1, constants::FRAME_LENGTH})
+    {
+        Ort::SessionOptions session_options;
+        session_options.SetIntraOpNumThreads(constants::ONNX_THREADS);
+        session_options.SetGraphOptimizationLevel(ORT_ENABLE_ALL);
+
+        session = Ort::Session(env, model_ort_start, model_ort_size, session_options);
+
+        const auto input_name_ptr = session.GetInputNameAllocated(0, allocator);
+        const auto output_name_ptr = session.GetOutputNameAllocated(0, allocator);
+
+        input_name = input_name_ptr.get();
+        output_name = output_name_ptr.get();
+    }
+
+public:
+    CrepeModel(const CrepeModel&) = delete;
+    CrepeModel& operator=(const CrepeModel&) = delete;
+    CrepeModel(CrepeModel&&) = delete;
+    CrepeModel& operator=(CrepeModel&&) = delete;
+
+    static CrepeModel& getInstance() {
+        static CrepeModel instance; // automatically destroyed
+        return instance;
+    }
+
+    PredictionResults runInference(const float* audio_data, int length, int sample_rate);
+};
+
+//CrepeModel* CrepeModel::instance = nullptr;
+
+PredictionResults CrepeModel::runInference(const float* audio_data, int length, int sample_rate)
 {
     using namespace constants;
 
@@ -96,81 +147,70 @@ PredictionResults run_inference(const float *audio_data, const int length, const
             << sample_rate << "Hz" << std::endl;
     }
 
-    // initialize ONNX
-    const Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "CREPE");
-
-    Ort::SessionOptions session_options;
-    session_options.SetIntraOpNumThreads(ONNX_THREADS);
-    session_options.SetGraphOptimizationLevel(ORT_ENABLE_ALL);
-
-    // Load the embedded model from model.ort.h
-    Ort::Session onnx_session(env, model_ort_start, model_ort_size, session_options);
-
-    // Map the audio data
     Eigen::Map<const Eigen::VectorXf> audio_eigen(audio_data, length);
 
-    // Calculate number of frames
     const int num_frames = (length - FRAME_LENGTH) / FFT_HOP + 1;
 
-    // Initialize results container
     PredictionResults results;
     results.pitches.resize(num_frames);
     results.confidences.resize(num_frames);
     results.times.resize(num_frames);
     results.num_frames = num_frames;
 
-    // Get input/output names
-    const Ort::AllocatorWithDefaultOptions allocator;
-    const auto input_name_ptr = onnx_session.GetInputNameAllocated(0, allocator);
-    const auto output_name_ptr = onnx_session.GetOutputNameAllocated(0, allocator);
-    const char *input_name = input_name_ptr.get();
-    const char *output_name = output_name_ptr.get();
-
-    const Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(
-        OrtArenaAllocator, OrtMemTypeDefault);
-    const std::vector<int64_t> input_dims = {1, FRAME_LENGTH};
-
-    // Pre-allocate frame buffer
     Eigen::VectorXf frame(FRAME_LENGTH);
 
-    // Process each frame
+    // process each frame in parallel
+    #pragma omp parallel for if(num_frames > 16) private(frame)
     for (int i = 0; i < num_frames; i++)
     {
         const size_t start_idx = i * FFT_HOP;
 
         frame = audio_eigen.segment(static_cast<Eigen::Index>(start_idx), FRAME_LENGTH);
+        normalize_audio(frame); // Normalize
 
-        normalize_audio(frame); // Normalize audio frame
-
-        // Create input tensor
-        const Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+        Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             memory_info, frame.data(), FRAME_LENGTH,
             input_dims.data(), input_dims.size());
 
-        // Run inference
-        std::vector<Ort::Value> output_tensors = onnx_session.Run(
-            Ort::RunOptions{}, &input_name, &input_tensor, 1, &output_name, 1);
+        //  inference -  use array of pointers for input/output names
+        const char* input_names[] = {input_name.c_str()};
+        const char* output_names[] = {output_name.c_str()};
+        std::vector<Ort::Value> output_tensors = session.Run(
+            Ort::RunOptions{}, input_names, &input_tensor, 1, output_names, 1);
 
-        // Process results
+        // results
         const auto *output_data = output_tensors[0].GetTensorMutableData<float>();
         const size_t output_size = output_tensors[0].GetTensorTypeAndShapeInfo().GetElementCount();
 
-        // Get pitch
+        // pitch
         const float pitch = get_pitch_from_crepe(output_data, output_size);
 
         // Map the output to Eigen
         Eigen::Map<const Eigen::VectorXf> output_eigen(output_data,
-                                                       static_cast<Eigen::Index>(output_size));
+                                                   static_cast<Eigen::Index>(output_size));
         int max_index;
         const float confidence = output_eigen.maxCoeff(&max_index);
 
         // Store results
-        results.pitches(i) = pitch;
-        results.confidences(i) = confidence;
-        results.times(i) = static_cast<float>(start_idx) / static_cast<float>(sample_rate);
+        #pragma omp critical // prevent race
+        {
+            results.pitches(i) = pitch;
+            results.confidences(i) = confidence;
+            results.times(i) = static_cast<float>(start_idx) / static_cast<float>(sample_rate);
+        }
     }
 
     return results;
+}
+
+PredictionResults run_inference(const std::vector<float> &audio_data, const int sample_rate)
+{
+    return run_inference(audio_data.data(), static_cast<int>(audio_data.size()), sample_rate);
+}
+
+PredictionResults run_inference(const float *audio_data, const int length, const int sample_rate)
+{
+    return CrepeModel::getInstance().runInference(audio_data, length, sample_rate);
 }
 
 PredictionAnalytics calculate_analytics(const PredictionResults &results)
