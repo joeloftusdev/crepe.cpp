@@ -10,12 +10,13 @@ namespace crepe
 // precomputed constants
 namespace constants_precomputed
 {
-    constexpr float PITCH_CONVERSION_FACTOR = constants::MODEL_RANGE_CENTS / (constants::MODEL_BINS - 1.0f);
-    constexpr float OCTAVE_FACTOR = 1.0f / constants::CENTS_CONVERSION;
+constexpr float PITCH_CONVERSION_FACTOR =
+    constants::MODEL_RANGE_CENTS / (constants::MODEL_BINS - 1.0f);
+constexpr float OCTAVE_FACTOR = 1.0f / constants::CENTS_CONVERSION;
 }
 
 float calculate_correlation(const Eigen::Ref<const Eigen::VectorXf> &x,
-                          const Eigen::Ref<const Eigen::VectorXf> &y)
+                            const Eigen::Ref<const Eigen::VectorXf> &y)
 {
     const float x_mean = x.mean();
     const float y_mean = y.mean();
@@ -24,7 +25,8 @@ float calculate_correlation(const Eigen::Ref<const Eigen::VectorXf> &x,
     float x_norm_sq = 0.0f;
     float y_norm_sq = 0.0f;
 
-    for (Eigen::Index i = 0; i < x.size(); ++i) {
+    for (Eigen::Index i = 0; i < x.size(); ++i)
+    {
         const float x_diff = x(i) - x_mean;
         const float y_diff = y(i) - y_mean;
         numerator += x_diff * y_diff;
@@ -41,11 +43,12 @@ float get_pitch_from_crepe(const float *output_data, const size_t output_size)
     using namespace constants_precomputed;
 
     const Eigen::Map<const Eigen::VectorXf> output(output_data,
-                                                 static_cast<Eigen::Index>(output_size));
+                                                   static_cast<Eigen::Index>(output_size));
     Eigen::Index max_index;
     output.maxCoeff(&max_index);
 
-    const float cents = MODEL_BASE_CENTS + (static_cast<float>(max_index) * PITCH_CONVERSION_FACTOR);
+    const float cents = MODEL_BASE_CENTS + (
+                            static_cast<float>(max_index) * PITCH_CONVERSION_FACTOR);
     return BASE_FREQUENCY * std::pow(OCTAVE_BASE, cents * OCTAVE_FACTOR);
 }
 
@@ -62,9 +65,9 @@ void analyze_frequency_bins()
     for (const int bin : bins)
     {
         const float freq = BASE_FREQUENCY *
-                         std::pow(OCTAVE_BASE,
-                                (static_cast<float>(bin) - CENTER_OFFSET * MODEL_BINS) /
-                                BINS_PER_OCTAVE);
+                           std::pow(OCTAVE_BASE,
+                                    (static_cast<float>(bin) - CENTER_OFFSET * MODEL_BINS) /
+                                    BINS_PER_OCTAVE);
         std::cout << bin << "\t" << freq << std::endl;
     }
 
@@ -92,7 +95,8 @@ void normalize_audio(Eigen::Ref<Eigen::VectorXf> audio_vec)
     }
 }
 
-class CrepeModel {
+class CrepeModel
+{
 private:
     Ort::Env env;
     Ort::Session session;
@@ -102,11 +106,10 @@ private:
     Ort::MemoryInfo memory_info;
     std::vector<int64_t> input_dims;
 
-    CrepeModel() :
-        env(ORT_LOGGING_LEVEL_WARNING, "CREPE"),
-        session(nullptr),
-        memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
-        input_dims({1, constants::FRAME_LENGTH})
+    CrepeModel() : env(ORT_LOGGING_LEVEL_WARNING, "CREPE"),
+                   session(nullptr),
+                   memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+                   input_dims({1, constants::FRAME_LENGTH})
     {
         Ort::SessionOptions session_options;
         session_options.SetIntraOpNumThreads(constants::ONNX_THREADS);
@@ -122,22 +125,26 @@ private:
     }
 
 public:
-    CrepeModel(const CrepeModel&) = delete;
-    CrepeModel& operator=(const CrepeModel&) = delete;
-    CrepeModel(CrepeModel&&) = delete;
-    CrepeModel& operator=(CrepeModel&&) = delete;
+    CrepeModel(const CrepeModel &) = delete;
 
-    static CrepeModel& getInstance() {
+    CrepeModel &operator=(const CrepeModel &) = delete;
+
+    CrepeModel(CrepeModel &&) = delete;
+
+    CrepeModel &operator=(CrepeModel &&) = delete;
+
+    static CrepeModel &getInstance()
+    {
         static CrepeModel instance; // automatically destroyed
         return instance;
     }
 
-    PredictionResults runInference(const float* audio_data, int length, int sample_rate);
+    PredictionResults runInference(const float *audio_data, int length, int sample_rate);
 };
 
 //CrepeModel* CrepeModel::instance = nullptr;
 
-PredictionResults CrepeModel::runInference(const float* audio_data, int length, int sample_rate)
+PredictionResults CrepeModel::runInference(const float *audio_data, int length, int sample_rate)
 {
     using namespace constants;
 
@@ -160,7 +167,7 @@ PredictionResults CrepeModel::runInference(const float* audio_data, int length, 
     Eigen::VectorXf frame(FRAME_LENGTH);
 
     // process each frame in parallel
-    #pragma omp parallel for if(num_frames > 16) private(frame)
+#pragma omp parallel for if(num_frames > 16) private(frame)
     for (int i = 0; i < num_frames; i++)
     {
         const size_t start_idx = i * FFT_HOP;
@@ -173,8 +180,8 @@ PredictionResults CrepeModel::runInference(const float* audio_data, int length, 
             input_dims.data(), input_dims.size());
 
         //  inference -  use array of pointers for input/output names
-        const char* input_names[] = {input_name.c_str()};
-        const char* output_names[] = {output_name.c_str()};
+        const char *input_names[] = {input_name.c_str()};
+        const char *output_names[] = {output_name.c_str()};
         std::vector<Ort::Value> output_tensors = session.Run(
             Ort::RunOptions{}, input_names, &input_tensor, 1, output_names, 1);
 
@@ -187,12 +194,12 @@ PredictionResults CrepeModel::runInference(const float* audio_data, int length, 
 
         // Map the output to Eigen
         Eigen::Map<const Eigen::VectorXf> output_eigen(output_data,
-                                                   static_cast<Eigen::Index>(output_size));
+                                                       static_cast<Eigen::Index>(output_size));
         int max_index;
         const float confidence = output_eigen.maxCoeff(&max_index);
 
         // Store results
-        #pragma omp critical // prevent race
+#pragma omp critical // prevent race
         {
             results.pitches(i) = pitch;
             results.confidences(i) = confidence;
