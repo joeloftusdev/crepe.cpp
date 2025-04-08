@@ -2,7 +2,10 @@
 external
 cmake-build-debug
 build-wasm
+build-wasm-release
 .DS_Store
 ._.DS_Store
 **/.DS_Store
 **/._.DS_Store
+web/crepe_wasm.js
+web/crepe_wasm.wasm
