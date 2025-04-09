@@ -28,5 +28,5 @@ else()
 endif()
 
 target_sources(crepe_core PRIVATE
-        ${EXTERNAL_DIR}/model.ort.c
+        ${MODEL_DIR}/model/model.ort.c
 )

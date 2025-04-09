@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(EXTERNAL_DIR "${CMAKE_SOURCE_DIR}/external")
 set(DEPS_DIR "${CMAKE_SOURCE_DIR}/deps")
+set(MODEL_DIR "${CMAKE_SOURCE_DIR}/crepe-model")
 
 include_directories(${EXTERNAL_DIR}/onnxruntime/include)
 
