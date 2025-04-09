@@ -7,3 +7,6 @@
 [submodule "deps/queue"]
 	path = deps/queue
 	url = https://github.com/cameron314/readerwriterqueue.git
+[submodule "deps/crepe"]
+	path = deps/crepe
+	url = https://github.com/joeloftusdev/crepe

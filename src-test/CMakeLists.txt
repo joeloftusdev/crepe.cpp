@@ -15,7 +15,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -ffast-math -flto -fno-signed-zer
 target_compile_definitions(crepe_test PRIVATE)
 
 configure_file(
-        ${CMAKE_SOURCE_DIR}/external/sweep.wav
+        ${CMAKE_SOURCE_DIR}/src-test/sweep.wav
         ${CMAKE_CURRENT_BINARY_DIR}/sweep.wav
         COPYONLY
 )
