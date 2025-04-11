@@ -1,12 +1,9 @@
-#include <iostream>
+#define CATCH_CONFIG_MAIN
+#include <catch2/catch_test_macros.hpp>
 #include <fstream>
-#include <string>
 #include <vector>
-
 #include "crepe.hpp"
-#define MINIAUDIO_IMPLEMENTATION
 #include "../deps/miniaudio/miniaudio.h"
-#include <iostream>
 
 std::vector<float> load_wav_file(const std::string &filename, int *out_sample_rate,
                                  std::string *error_msg)
@@ -24,16 +21,10 @@ std::vector<float> load_wav_file(const std::string &filename, int *out_sample_ra
     if (out_sample_rate)
     {
         *out_sample_rate = static_cast<int>(decoder.outputSampleRate);
-        std::cout << "Debug: Detected sample rate: " << *out_sample_rate << "Hz" << std::endl;
     }
 
     ma_uint64 frame_count;
     ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
-
-    if (out_sample_rate)
-    {
-        *out_sample_rate = decoder.outputSampleRate;
-    }
 
     const bool needs_conversion = decoder.outputChannels > 1;
 
@@ -64,56 +55,47 @@ std::vector<float> load_wav_file(const std::string &filename, int *out_sample_ra
     return audio_data;
 }
 
-int main()
-{
-    try
-    {
-        // enable this to debug frequency mapping
-        //crepe::analyze_frequency_bins();
+TEST_CASE("Frequency Analysis with CREPE - Detailed Output", "[crepe]") {
+    const std::string wav_file_path = "sweep.wav";
 
-        const std::string wav_file_path = "sweep.wav";
-        std::ifstream file_check(wav_file_path);
-        if (!file_check)
-        {
-            std::cerr << "Error: Cannot open file at path: " << wav_file_path << std::endl;
-            return 1;
-        }
-        file_check.close();
+    std::ifstream file_check(wav_file_path);
+    REQUIRE(file_check.good());
+    file_check.close();
 
-        int sample_rate = 0;
-        const std::vector<float> audio_data = load_wav_file(wav_file_path, &sample_rate, nullptr);
+    int sample_rate = 0;
+    std::string error_msg;
+    const std::vector<float> audio_data = load_wav_file(wav_file_path, &sample_rate, &error_msg);
+    REQUIRE(!audio_data.empty());
+    INFO("Sample rate: " << sample_rate << "Hz");
 
-        // Run inference using the function from inference.cpp
+    SECTION("Run inference and validate results with detailed output") {
         crepe::PredictionResults results = crepe::run_inference(audio_data, sample_rate);
+        REQUIRE(results.num_frames > 0);
 
-        // Calculate analytics
         const crepe::PredictionAnalytics analytics = crepe::calculate_analytics(results);
 
-        std::cout << "\nResults Summary:" << std::endl;
-        std::cout << "Processed " << results.num_frames << " frames" << std::endl;
-        std::cout << "Mean confidence: " << analytics.mean_confidence << std::endl;
+        INFO("Results Summary:");
+        INFO("Processed " << results.num_frames << " frames");
+        INFO("Mean confidence: " << analytics.mean_confidence);
 
-        std::cout << "Sample frequencies (Hz): [";
-        for (int i = 0; i < std::min(5, results.num_frames); i++)
-        {
-            std::cout << results.pitches(i);
+        std::stringstream freq_stream;
+        freq_stream << "Sample frequencies (Hz): [";
+        for (int i = 0; i < std::min(5, results.num_frames); i++) {
+            freq_stream << results.pitches(i);
             if (i < std::min(4, results.num_frames - 1))
-                std::cout << " ";
+                freq_stream << " ";
         }
-        std::cout << "]" << std::endl;
+        freq_stream << "]";
+        INFO(freq_stream.str());
 
-        std::cout << "Min frequency: " << analytics.min_frequency << std::endl;
-        std::cout << "Max frequency: " << analytics.max_frequency << std::endl;
-        std::cout << "Correlation between time and frequency: " << analytics.time_pitch_correlation
-            << std::endl;
-        std::cout << "Should be close to 1.0 for frequency sweep" << std::endl;
+        INFO("Min frequency: " << analytics.min_frequency);
+        INFO("Max frequency: " << analytics.max_frequency);
+        INFO("Correlation between time and frequency: " << analytics.time_pitch_correlation);
+        INFO("Should be close to 1.0 for frequency sweep");
 
+        CHECK(analytics.mean_confidence > 0.0f);
+        CHECK(analytics.min_frequency > 0.0f);
+        CHECK(analytics.max_frequency > analytics.min_frequency);
+        CHECK(analytics.time_pitch_correlation > 0.9f);
     }
-    catch (const std::exception &e)
-    {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
-    }
-
-    return 0;
 }

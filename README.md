@@ -74,19 +74,28 @@ $ cmake -DCMAKE_BUILD_TYPE=Release ..
 $ cmake --build .
 ```
 
-Example output running the test: 
+Example output running the catch2 test: 
 
 ```
-Debug: Detected sample rate: 16000Hz
+# Run the test with verbose output:
+$ ./src-test/crepe_test -s
+```
 
-Results Summary:
-Processed 270 frames
-Mean confidence: 0.845953
-Sample frequencies (Hz): [187.803 187.803 189.985 192.193 192.193]
-Min frequency: 187.803
-Max frequency: 1766.17
-Correlation between time and frequency: 0.961408
-Should be close to 1.0 for frequency sweep
+```
+PASSED:
+  CHECK( analytics.mean_confidence > 0.0f )
+with expansion:
+  0.84595f > 0.0f
+with messages:
+  Sample rate: 16000Hz
+  Results Summary:
+  Processed 270 frames
+  Mean confidence: 0.845953
+  Sample frequencies (Hz): [187.803 187.803 189.985 192.193 192.193]
+  Min frequency: 187.803
+  Max frequency: 1766.17
+  Correlation between time and frequency: 0.961408
+  Should be close to 1.0 for frequency sweep
 ```
 
 wasm:
