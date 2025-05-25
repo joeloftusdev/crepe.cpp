@@ -12,9 +12,9 @@ This uses [ONNXRuntime](https://github.com/microsoft/onnxruntime) & scripts from
 * [crepe-model](./crepe-model) contains the ONNX & ORT model along with the generated h and c file
 * [scripts](./scripts) contain the ORT model build scripts
 * [src](./src) shared inference
-* [src_wasm](./src_wasm) main WASM, for the web app
-* [src_cli](./src_cli) is a very simple cli app that uses [miniaudio](https://github.com/mackron/miniaudio) for audio processing
-* [src_test](./src_test) a simple test that replicates the orignal repo python test for debugging using [miniaudio](https://github.com/mackron/miniaudio)
+* [src_wasm](./src-wasm) main WASM, for the web app
+* [src_cli](./src-cli) is a very simple cli app that uses [miniaudio](https://github.com/mackron/miniaudio) for audio processing
+* [src_test](./src-test) a simple test that replicates the orignal repo python test for debugging using [miniaudio](https://github.com/mackron/miniaudio)
 * [deps](./deps) project dependencies
 * [web](./web) Javascript/HTML code for the WASM app.
 
